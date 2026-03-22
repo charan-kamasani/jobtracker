@@ -72,8 +72,29 @@ let _holidays = [];
 const setHolidays = (h) => { _holidays = (h || []).map(x => typeof x === "string" ? x : x.date); };
 const isWorkday = (dateStr) => isWeekday(dateStr) && !_holidays.includes(dateStr);
 const countWorkdays = (dates) => dates.filter(d => isWorkday(d)).length;
+// Count working days between two dates (inclusive), skipping weekends + holidays
+const countWorkdaysBetween = (startDate, endDate) => {
+  if (!startDate || !endDate) return 1;
+  let count = 0;
+  const start = parseD(startDate);
+  const end = parseD(endDate);
+  const d = new Date(start);
+  while (d <= end) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dy = String(d.getDate()).padStart(2, "0");
+    if (isWorkday(`${y}-${m}-${dy}`)) count++;
+    d.setDate(d.getDate() + 1);
+  }
+  return Math.max(1, count);
+};
+// Count unique weekdays (Mon-Fri, non-holiday) in a list of dates
+const countWeekdaysIn = (dates) => {
+  const unique = [...new Set(dates)];
+  return Math.max(1, unique.filter(d => isWeekday(d) && !_holidays.includes(d)).length);
+};
 const uid = () => Math.random().toString(36).slice(2, 9);
-const init = () => ({ emps: [], entries: [], pstat: {}, events: [], stars: {}, pin: "admin123", target: 30, log: [], holidays: [] });
+const init = () => ({ emps: [], entries: [], pstat: {}, events: [], stars: {}, pin: "admin123", target: 30, log: [], holidays: [], regLock: false });
 
 const getCSS = () => `@keyframes spin{to{transform:rotate(360deg)}}@keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes rise{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:none}}@keyframes fadeScale{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}@keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}@keyframes slideFade{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}*{box-sizing:border-box;margin:0}::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px}select option{background:${C.panel};color:${C.text}}`;
 
@@ -237,7 +258,7 @@ function doPDF(st, dateFrom, dateTo, tgt) {
 
   html += `<h2>Employee Summary</h2><table><thead><tr><th>Employee</th><th>Total</th><th>Working Days</th><th>People</th><th>Avg/Day</th><th>Target</th></tr></thead><tbody>`;
   Object.entries(byEmp).sort((a,b)=>b[1].total-a[1].total).forEach(([name,d])=>{
-    const da = countWorkdays(Object.keys(d.days)); const pplCount = Object.keys(d.people).length; const avg = pplCount > 0 && da > 0 ? Math.round(d.total / pplCount / da) : 0;
+    const da = countWeekdaysIn(Object.keys(d.days)); const pplCount = Object.keys(d.people).length; const avg = pplCount > 0 && da > 0 ? Math.round(d.total / pplCount / da) : 0;
     const dh = Object.keys(d.days).filter(dt => isWorkday(dt) && d.days[dt] >= tgt).length;
     html += `<tr><td><strong>${name}</strong></td><td>${d.total}</td><td>${da}</td><td>${pplCount}</td><td>${avg}</td><td><span class="tag ${dh===da?'tag-g':'tag-r'}">${dh}/${da}</span></td></tr>`;
   });
@@ -297,7 +318,7 @@ function doEmpPDF(st, empId, tgt) {
 <div class="stats">
 <div class="stat"><div class="n green">${totalJ}</div><div class="l">Total Applications</div></div>
 <div class="stat"><div class="n blue">${weekdayDates.length}</div><div class="l">Working Days</div></div>
-<div class="stat"><div class="n">${people.length > 0 && weekdayDates.length > 0 ? Math.round(totalJ / people.length / weekdayDates.length) : 0}</div><div class="l">Avg/Day</div></div>
+<div class="stat"><div class="n">${people.length > 0 ? Math.round(totalJ / people.length / countWeekdaysIn(weekdayDates)) : 0}</div><div class="l">Avg/Day</div></div>
 <div class="stat"><div class="n ${daysHit === weekdayDates.length ? 'green' : 'red'}">${daysHit}/${weekdayDates.length}</div><div class="l">Target</div></div>
 <div class="stat"><div class="n">${people.length}</div><div class="l">People</div></div>
 ${stars > 0 ? `<div class="stat"><div class="n gold">${stars} &#9733;</div><div class="l">Stars</div></div>` : ''}
@@ -334,12 +355,23 @@ export default function App() {
   const toggle = useCallback(() => { setDark(d => { const n = !d; setThemeColors(n); return n; }); }, []);
   setThemeColors(dark);
 
-  const [st, setSt] = useState(null); const [vw, setVw] = useState("land"); const [cur, setCur] = useState(null); const [atab, setAtab] = useState("dash"); const [ld, setLd] = useState(true);
-  const out = useCallback(() => { setVw("land"); setCur(null); setAtab("dash"); }, []);
+  const [st, setSt] = useState(null);
+  const [vw, setVw] = useState(() => localStorage.getItem("jt-vw") || "land");
+  const [cur, setCur] = useState(() => localStorage.getItem("jt-cur") || null);
+  const [atab, setAtab] = useState(() => localStorage.getItem("jt-atab") || "dash");
+  const [ld, setLd] = useState(true);
+
+  // Persist session on changes
+  useEffect(() => { localStorage.setItem("jt-vw", vw); }, [vw]);
+  useEffect(() => { if (cur) localStorage.setItem("jt-cur", cur); else localStorage.removeItem("jt-cur"); }, [cur]);
+  useEffect(() => { localStorage.setItem("jt-atab", atab); }, [atab]);
+
+  const out = useCallback(() => { setVw("land"); setCur(null); setAtab("dash"); localStorage.removeItem("jt-vw"); localStorage.removeItem("jt-cur"); localStorage.removeItem("jt-atab"); }, []);
   useSTO(TIMEOUT, out);
-  const load = useCallback(async () => { try { const r = await window.storage.get(SK, true); const data = r?.value ? { ...init(), ...JSON.parse(r.value) } : init(); setHolidays(data.holidays); setSt(data); } catch { setSt(init()); } }, []);
+  const lastSave = useRef(0);
+  const load = useCallback(async () => { if (Date.now() - lastSave.current < 5000) return; try { const r = await window.storage.get(SK, true); const data = r?.value ? { ...init(), ...JSON.parse(r.value) } : null; if (data) { setHolidays(data.holidays); setSt(data); localStorage.setItem(SK, JSON.stringify(data)); } else { const lb = localStorage.getItem(SK); if (lb) { const d = { ...init(), ...JSON.parse(lb) }; setHolidays(d.holidays); setSt(d); } else { setSt(init()); } } } catch { const lb = localStorage.getItem(SK); if (lb) { try { const d = { ...init(), ...JSON.parse(lb) }; setHolidays(d.holidays); setSt(d); } catch { setSt(init()); } } else { setSt(init()); } } }, []);
   useEffect(() => { (async () => { await load(); setLd(false); })(); const i = setInterval(load, 15000); return () => clearInterval(i); }, [load]);
-  const save = useCallback(async n => { setHolidays(n.holidays); setSt(n); try { await window.storage.set(SK, JSON.stringify(n), true); } catch {} }, []);
+  const save = useCallback(async n => { lastSave.current = Date.now(); setHolidays(n.holidays); setSt(n); localStorage.setItem(SK, JSON.stringify(n)); try { await window.storage.set(SK, JSON.stringify(n), true); } catch {} }, []);
   if (ld || !st) return <div style={{ ...pg(), display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ width: 36, height: 36, border: `3px solid ${C.border}`, borderTopColor: C.blue, borderRadius: "50%", animation: "spin .7s linear infinite" }} /><style>{getCSS()}</style></div>;
   return <ThemeCtx.Provider value={{ dark, toggle }}>
     <div><style>{getCSS()}</style>
@@ -357,18 +389,17 @@ function ThemeToggle() {
   </button>;
 }
 
-function EmpStats({ my, tgt }) {
+function EmpStats({ my, tgt, pplLimit }) {
   const now = new Date();
-  const thisWeekStart = new Date(now); thisWeekStart.setDate(now.getDate() - now.getDay());
-  const weekStr = thisWeekStart.toISOString().split("T")[0];
+  const thisWeekStart = new Date(now); thisWeekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  const weekStr = `${thisWeekStart.getFullYear()}-${String(thisWeekStart.getMonth()+1).padStart(2,"0")}-${String(thisWeekStart.getDate()).padStart(2,"0")}`;
   const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  // Include ALL entries (even weekends/holidays) for totals - they did the work
+  // Include ALL entries for totals - count actual days they submitted
   const weekEntries = my.filter(e => e.date >= weekStr);
   const monthEntries = my.filter(e => e.date.startsWith(monthStr));
   const weekJobs = weekEntries.reduce((a, e) => a + e.jobs, 0);
   const monthJobs = monthEntries.reduce((a, e) => a + e.jobs, 0);
-  // Count only working days for "days active" display
   const weekDays = new Set(weekEntries.map(e => e.date)).size;
   const monthDays = new Set(monthEntries.map(e => e.date)).size;
   const weekPpl = new Set(weekEntries.map(e => e.person)).size;
@@ -376,40 +407,79 @@ function EmpStats({ my, tgt }) {
   const allDays = [...new Set(my.map(e => e.date))];
   const daysHit = allDays.filter(d => my.filter(e => e.date === d).reduce((a, e) => a + e.jobs, 0) >= tgt).length;
 
-  // Avg: total jobs per person / number of days they submitted (at least 1)
-  const calcAvg = (entries) => {
+  // Avg/day per person: total apps (all days) / number of weekdays (Mon-Fri) they submitted on
+  const calcAvgPerPerson = (entries) => {
     const pm = {};
-    entries.forEach(e => { if (!pm[e.person]) pm[e.person] = { t: 0, d: new Set() }; pm[e.person].t += e.jobs; pm[e.person].d.add(e.date); });
-    const avgs = Object.values(pm).map(p => p.d.size > 0 ? Math.round(p.t / p.d.size) : 0);
-    return avgs.length > 0 ? Math.round(avgs.reduce((a,v) => a+v, 0) / avgs.length) : 0;
+    entries.forEach(e => { if (!pm[e.person]) pm[e.person] = { t: 0, dates: [] }; pm[e.person].t += e.jobs; pm[e.person].dates.push(e.date); });
+    const perPerson = Object.entries(pm).map(([name, p]) => {
+      const uniqueDates = [...new Set(p.dates)];
+      const weekdaysSubmitted = uniqueDates.filter(d => isWeekday(d) && !_holidays.includes(d)).length;
+      const wd = Math.max(1, weekdaysSubmitted);
+      const daysSubmitted = uniqueDates.length;
+      return { name, total: p.t, wd, daysSubmitted, avg: Math.round(p.t / wd) };
+    }).sort((a, b) => b.avg - a.avg);
+    const combined = perPerson.length > 0 ? Math.round(perPerson.reduce((a, p) => a + p.avg, 0) / perPerson.length) : 0;
+    return { combined, perPerson };
   };
-  const weekAvg = calcAvg(weekEntries);
-  const monthAvg = calcAvg(monthEntries);
+  const weekStats = calcAvgPerPerson(weekEntries);
+  const monthStats = calcAvgPerPerson(monthEntries);
+  // All unique person names this employee works with
+  const personNames = [...new Set(my.map(e => e.person))];
 
   return <div style={crd()}>
     <div style={{ fontWeight: 700, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}><TrendingUp size={16} color={C.blue} /> My Stats</div>
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-      {/* This Week */}
+
+    {/* Combined totals — always show */}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: personNames.length > 1 ? 14 : 0 }}>
       <div style={{ background: C.panel, borderRadius: 10, border: `1px solid ${C.border}`, padding: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, marginBottom: 10, textTransform: "uppercase" }}>This week</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, marginBottom: 10, textTransform: "uppercase" }}>This week {personNames.length > 1 && "(combined)"}</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <div><div style={{ fontSize: 22, fontWeight: 800, color: C.green }}>{weekJobs}</div><div style={{ fontSize: 9, color: C.dim }}>Applications</div></div>
-          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.blue }}>{weekDays}</div><div style={{ fontSize: 9, color: C.dim }}>Working Days</div></div>
+          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.blue }}>{weekDays}</div><div style={{ fontSize: 9, color: C.dim }}>Days Submitted</div></div>
           <div><div style={{ fontSize: 22, fontWeight: 800, color: C.cyan }}>{weekPpl}</div><div style={{ fontSize: 9, color: C.dim }}>People</div></div>
-          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.amber }}>{weekAvg}</div><div style={{ fontSize: 9, color: C.dim }}>Avg/day</div></div>
+          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.amber }}>{weekStats.combined}</div><div style={{ fontSize: 9, color: C.dim }}>Avg/day</div></div>
         </div>
       </div>
-      {/* This Month */}
       <div style={{ background: C.panel, borderRadius: 10, border: `1px solid ${C.border}`, padding: 14 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.violet, marginBottom: 10, textTransform: "uppercase" }}>This month</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.violet, marginBottom: 10, textTransform: "uppercase" }}>This month {personNames.length > 1 && "(combined)"}</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <div><div style={{ fontSize: 22, fontWeight: 800, color: C.green }}>{monthJobs}</div><div style={{ fontSize: 9, color: C.dim }}>Applications</div></div>
-          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.blue }}>{monthDays}</div><div style={{ fontSize: 9, color: C.dim }}>Working Days</div></div>
+          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.blue }}>{monthDays}</div><div style={{ fontSize: 9, color: C.dim }}>Days Submitted</div></div>
           <div><div style={{ fontSize: 22, fontWeight: 800, color: C.cyan }}>{monthPpl}</div><div style={{ fontSize: 9, color: C.dim }}>People</div></div>
-          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.amber }}>{monthAvg}</div><div style={{ fontSize: 9, color: C.dim }}>Avg/day</div></div>
+          <div><div style={{ fontSize: 22, fontWeight: 800, color: C.amber }}>{monthStats.combined}</div><div style={{ fontSize: 9, color: C.dim }}>Avg/day</div></div>
         </div>
       </div>
     </div>
+
+    {/* Per-person boxes — only show when 2+ people */}
+    {personNames.length > 1 && personNames.map(pName => {
+      const wk = weekStats.perPerson.find(p => p.name === pName);
+      const mo = monthStats.perPerson.find(p => p.name === pName);
+      const pColor = personNames.indexOf(pName) % 2 === 0 ? C.cyan : C.gold;
+      return <div key={pName}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: pColor, marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}><Users size={13} color={pColor} /> {pName}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <div style={{ background: C.panel, borderRadius: 10, border: `1px solid ${pColor}20`, padding: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.blue, marginBottom: 8, textTransform: "uppercase" }}>Week</div>
+            {wk ? <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <div><div style={{ fontSize: 20, fontWeight: 800, color: C.green }}>{wk.total}</div><div style={{ fontSize: 8, color: C.dim }}>Apps</div></div>
+              <div><div style={{ fontSize: 20, fontWeight: 800, color: C.amber }}>{wk.avg}</div><div style={{ fontSize: 8, color: C.dim }}>Avg/day</div></div>
+              <div><div style={{ fontSize: 14, fontWeight: 700, color: C.blue }}>{wk.daysSubmitted}</div><div style={{ fontSize: 8, color: C.dim }}>Days</div></div>
+              <div><div style={{ fontSize: 14, fontWeight: 700, color: C.dim }}>{wk.wd}</div><div style={{ fontSize: 8, color: C.dim }}>÷ Workdays</div></div>
+            </div> : <div style={{ color: C.dim, fontSize: 11 }}>No entries</div>}
+          </div>
+          <div style={{ background: C.panel, borderRadius: 10, border: `1px solid ${pColor}20`, padding: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.violet, marginBottom: 8, textTransform: "uppercase" }}>Month</div>
+            {mo ? <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <div><div style={{ fontSize: 20, fontWeight: 800, color: C.green }}>{mo.total}</div><div style={{ fontSize: 8, color: C.dim }}>Apps</div></div>
+              <div><div style={{ fontSize: 20, fontWeight: 800, color: C.amber }}>{mo.avg}</div><div style={{ fontSize: 8, color: C.dim }}>Avg/day</div></div>
+              <div><div style={{ fontSize: 14, fontWeight: 700, color: C.blue }}>{mo.daysSubmitted}</div><div style={{ fontSize: 8, color: C.dim }}>Days</div></div>
+              <div><div style={{ fontSize: 14, fontWeight: 700, color: C.dim }}>{mo.wd}</div><div style={{ fontSize: 8, color: C.dim }}>÷ Workdays</div></div>
+            </div> : <div style={{ color: C.dim, fontSize: 11 }}>No entries</div>}
+          </div>
+        </div>
+      </div>;
+    })}
     {/* All-time row */}
     <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
       <div style={{ padding: "6px 14px", borderRadius: 8, background: C.greenD, textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: C.green }}>{my.reduce((a, e) => a + e.jobs, 0)}</div><div style={{ fontSize: 8, color: C.dim }}>ALL TIME</div></div>
@@ -520,12 +590,16 @@ function ALog({ st, ok, bk }) {
 
 function EmpP({ st, save, cur, setCur, bk }) {
   const [sid, setSid] = useState(""); const [pw, setPw] = useState(""); const [pe, setPe] = useState("");
-  const [nn, setNn] = useState(""); const [np, setNp] = useState(""); const [reg, setReg] = useState(false); const [spw, setSpw] = useState(false);
+  const [nn, setNn] = useState(""); const [np, setNp] = useState(""); const [nrp, setNrp] = useState("1"); const [nrpNames, setNrpNames] = useState([""]); const [reg, setReg] = useState(false); const [spw, setSpw] = useState(false);
   const [dt, setDt] = useState(td()); const [rows, setRows] = useState([{ p: "", j: "" }]);
   const [evm, setEvm] = useState(null); const [evt, setEvt] = useState("call"); const [evc, setEvc] = useState(""); const [evn, setEvn] = useState(""); const [evd, setEvd] = useState(td());
   const [editId, setEditId] = useState(null); const [editJobs, setEditJobs] = useState("");
+  const [myEvEdM, setMyEvEdM] = useState(null); const [myEvEdD, setMyEvEdD] = useState({});
+  const [changePplM, setChangePplM] = useState(false); const [newPplCount, setNewPplCount] = useState(""); const [newPplNames, setNewPplNames] = useState([]);
   const em = cur ? st.emps.find(x => x.id === cur) : null;
   const tgt = st.target || 30;
+  const pplLimit = em?.pplCount || 1;
+  const pplNames = em?.pplNames || [];
   const my = useMemo(() => st.entries.filter(x => x.eid === cur), [st.entries, cur]);
   const todJ = useMemo(() => my.filter(x => x.date === td()).reduce((a, x) => a + x.jobs, 0), [my]);
   const todByPerson = useMemo(() => { const m = {}; my.filter(x => x.date === td()).forEach(x => { m[x.person] = (m[x.person]||0) + x.jobs; }); return Object.entries(m).sort((a,b) => b[1]-a[1]); }, [my]);
@@ -546,23 +620,45 @@ function EmpP({ st, save, cur, setCur, bk }) {
     }).sort((a,b) => b[1]-a[1]);
   }, [my, st.pstat]);
 
+  // Known person names: from this employee's history + all active people globally
+  const knownPersons = useMemo(() => {
+    const names = new Set();
+    my.forEach(e => names.add(e.person));
+    Object.entries(st.pstat || {}).forEach(([name, stat]) => { if (stat === "active" || stat === "placed") names.add(name); });
+    return [...names].sort();
+  }, [my, st.pstat]);
+
   const login = () => { const e = st.emps.find(x => x.id === sid); if (!e) return; if (e.pw && e.pw !== pw) { setPe("Wrong password"); return; } setCur(sid); setPw(""); setPe(""); };
-  const doReg = () => { if (!nn.trim() || np.length < 4) return; const e = { id: uid(), name: nn.trim(), pw: np, dt: td() }; save({ ...st, emps: [...st.emps, e] }); setCur(e.id); setNn(""); setNp(""); setReg(false); };
+  const doReg = () => { if (!nn.trim() || np.length < 4 || !Number(nrp)) return; const names = nrpNames.filter(n => n.trim()); if (names.length !== Number(nrp)) return; const e = { id: uid(), name: nn.trim(), pw: np, dt: td(), pplCount: Number(nrp), pplNames: names.map(n => n.trim()) }; save({ ...st, emps: [...st.emps, e] }); setCur(e.id); setNn(""); setNp(""); setNrp("1"); setNrpNames([""]); setReg(false); };
   const [dupWarn, setDupWarn] = useState("");
   const [okMsg, setOkMsg] = useState("");
   const submit = () => {
     const ok = rows.filter(r => r.p.trim() && Number(r.j) > 0); if (!ok.length) return;
     const submitDate = dt || td();
-    // Block future dates
     if (submitDate > td()) { setDupWarn("Cannot submit for future dates."); return; }
-    // Duplicate check: same employee + same person + same date
-    const dupes = ok.filter(r => st.entries.some(e => e.eid === cur && e.person === r.p.trim() && e.date === (dt||td())));
+    // Check for duplicate person names within this submission
+    const names = ok.map(r => r.p.trim().toLowerCase());
+    const dupNames = names.filter((n, i) => names.indexOf(n) !== i);
+    if (dupNames.length > 0) {
+      setDupWarn("You have duplicate person names in your submission. Only 1 entry per person per date.");
+      return;
+    }
+    // Check people limit
+    const existingPeople = new Set(st.entries.filter(e => e.eid === cur && e.date === submitDate).map(e => e.person));
+    const newPeople = new Set(ok.map(r => r.p.trim()));
+    const allPeople = new Set([...existingPeople, ...newPeople]);
+    if (allPeople.size > pplLimit) {
+      setDupWarn(`You can only apply for ${pplLimit} ${pplLimit === 1 ? "person" : "people"} per day. Change your limit using the settings option above.`);
+      return;
+    }
+    // Block if already submitted for this person on this date
+    const dupes = ok.filter(r => st.entries.some(e => e.eid === cur && e.person.toLowerCase() === r.p.trim().toLowerCase() && e.date === submitDate));
     if (dupes.length > 0) {
-      setDupWarn(`Already submitted for ${dupes.map(d=>d.p.trim()).join(", ")} on ${fmtD(dt||td())}. Update the existing entry instead.`);
+      setDupWarn(`Already submitted for ${dupes.map(d=>d.p.trim()).join(", ")} on ${fmtD(submitDate)}. Only 1 entry per person per date — use Edit to change the count.`);
       return;
     }
     setDupWarn("");
-    const ne = ok.map(r => ({ id: uid(), eid: cur, person: r.p.trim(), jobs: Number(r.j), date: dt||td() }));
+    const ne = ok.map(r => ({ id: uid(), eid: cur, person: r.p.trim(), jobs: Number(r.j), date: submitDate }));
     const tot = ne.reduce((a,x) => a + x.jobs, 0);
     const ps = { ...st.pstat }; ne.forEach(n => { if (!ps[n.person]) ps[n.person] = "active"; });
     save({ ...st, entries: [...st.entries, ...ne], pstat: ps }); setRows([{ p: "", j: "" }]); setDt(td());
@@ -581,17 +677,43 @@ function EmpP({ st, save, cur, setCur, bk }) {
     save({ ...st, entries: st.entries.map(x => x.id === editId ? { ...x, jobs: Number(editJobs) } : x) });
     setEditId(null); setEditJobs("");
   };
+  const saveMyEvEdit = () => {
+    if (!myEvEdM) return;
+    save({ ...st, events: (st.events||[]).map(x => x.id === myEvEdM ? { ...x, ...myEvEdD } : x) });
+    setMyEvEdM(null); setMyEvEdD({});
+  };
+  const deleteMyEv = (evId) => {
+    save({ ...st, events: (st.events||[]).filter(x => x.id !== evId) });
+  };
+  const changePplCount = () => {
+    const n = Number(newPplCount);
+    if (!n || n < 1 || n > 10) return;
+    const names = newPplNames.filter(x => x.trim());
+    if (names.length !== n) return;
+    save({ ...st, emps: st.emps.map(x => x.id === cur ? { ...x, pplCount: n, pplNames: names.map(x => x.trim()) } : x) });
+    setChangePplM(false); setNewPplCount(""); setNewPplNames([]);
+  };
 
   if (!cur) return <div style={pg()}><div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
     <div style={{ ...crd(), maxWidth: 400, width: "100%", animation: "fi .4s" }}>
       <div style={{ textAlign: "center", marginBottom: 20 }}><Lock size={28} color={C.blue} style={{ marginBottom: 10 }} /><h2 style={{ fontSize: 18, fontWeight: 700 }}>Employee Login</h2></div>
       {st.emps.length > 0 && <div style={{ marginBottom: 16 }}>
-        <select value={sid} onChange={e => { setSid(e.target.value); setPe(""); }} style={{ ...inp(), appearance: "auto", marginBottom: 8 }}><option value="">Select name</option>{st.emps.filter(e => !e.off && !e.removed).map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
+        <select value={sid} onChange={e => { setSid(e.target.value); setPe(""); }} style={{ ...inp(), appearance: "auto", marginBottom: 8 }}><option value="">Select name</option>{st.emps.filter(e => !e.removed).map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
         {sid && <div style={{ position: "relative", marginBottom: 8 }}><input type={spw?"text":"password"} placeholder="Password" value={pw} onChange={e => { setPw(e.target.value); setPe(""); }} onKeyDown={e => e.key === "Enter" && login()} style={{ ...inp(), paddingRight: 36 }} /><button onClick={() => setSpw(!spw)} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: C.dim }}>{spw ? <EyeOff size={13} /> : <Eye size={13} />}</button></div>}
         {pe && <div style={{ color: C.red, fontSize: 11, marginBottom: 6 }}>{pe}</div>}
         <B c={C.blue} onClick={login} style={{ width: "100%", justifyContent: "center" }}>Login</B>
       </div>}
-      {reg ? <div><input placeholder="Full name" value={nn} onChange={e => setNn(e.target.value)} style={{ ...inp(), marginBottom: 6 }} /><input type="password" placeholder="Create password (4+)" value={np} onChange={e => setNp(e.target.value)} onKeyDown={e => e.key === "Enter" && doReg()} style={{ ...inp(), marginBottom: 10 }} /><div style={{ display: "flex", gap: 6 }}><B c={C.dim} o onClick={() => setReg(false)} style={{ flex: 1 }}>Cancel</B><B c={C.green} onClick={doReg} style={{ flex: 1 }}><UserPlus size={13} /> Register</B></div></div>
+      {reg ? (st.regLock ? <div style={{ padding: "12px 16px", borderRadius: 10, background: C.amberD, border: `1px solid ${C.amber}25` }}>
+        <div style={{ color: C.amber, fontSize: 12, fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}><Shield size={13} /> Registration Disabled</div>
+        <div style={{ color: C.sub, fontSize: 11, marginBottom: 10 }}>Only the admin can add new employees. Contact your admin to get access.</div>
+        <Bs c={C.dim} o onClick={() => setReg(false)}>OK</Bs>
+      </div> : <div>
+        <input placeholder="Full name" value={nn} onChange={e => setNn(e.target.value)} style={{ ...inp(), marginBottom: 6 }} />
+        <input type="password" placeholder="Create password (4+)" value={np} onChange={e => setNp(e.target.value)} style={{ ...inp(), marginBottom: 6 }} />
+        <div style={{ marginBottom: 10 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>HOW MANY PEOPLE ARE YOU APPLYING FOR?</label><select value={nrp} onChange={e => { const v = Number(e.target.value); setNrp(String(v)); const cur = [...nrpNames]; while (cur.length < v) cur.push(""); setNrpNames(cur.slice(0, v)); }} style={{ ...inp(), appearance: "auto" }}>{[1,2,3,4,5].map(n => <option key={n} value={n}>{n} {n === 1 ? "person" : "people"}</option>)}</select></div>
+        <div style={{ marginBottom: 10 }}>{nrpNames.map((name, i) => <div key={i} style={{ marginBottom: 4 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 2 }}>PERSON {nrpNames.length > 1 ? i + 1 : ""} NAME</label><input placeholder={`Enter person name${nrpNames.length > 1 ? ` #${i+1}` : ""}`} value={name} onChange={e => { const n = [...nrpNames]; n[i] = e.target.value; setNrpNames(n); }} style={inp()} /></div>)}</div>
+        <div style={{ display: "flex", gap: 6 }}><B c={C.dim} o onClick={() => setReg(false)} style={{ flex: 1 }}>Cancel</B><B c={C.green} onClick={doReg} style={{ flex: 1 }}><UserPlus size={13} /> Register</B></div>
+      </div>)
       : <B c={C.cyan} o onClick={() => setReg(true)} style={{ width: "100%", justifyContent: "center" }}><UserPlus size={13} /> New Employee</B>}
       <B c={C.dim} o onClick={bk} style={{ width: "100%", justifyContent: "center", marginTop: 10 }}>Back</B>
     </div>
@@ -603,7 +725,7 @@ function EmpP({ st, save, cur, setCur, bk }) {
         <div style={{ width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg,${C.blue},${C.cyan})`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Briefcase size={18} color="#fff" /></div>
         <div>
           <div style={logoCss()}>HIREZEN JobTracker</div>
-          <div style={{ color: C.sub, fontSize: 11, marginTop: 1, display: "flex", alignItems: "center", gap: 5 }}>Welcome, <strong style={{ color: C.text }}>{em?.name}</strong> {(st.stars?.[cur]||0) > 0 && <Stars2 n={st.stars[cur]} />}</div>
+          <div style={{ color: C.sub, fontSize: 11, marginTop: 1, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>Welcome, <strong style={{ color: C.text }}>{em?.name}</strong> {(st.stars?.[cur]||0) > 0 && <Stars2 n={st.stars[cur]} />} <span style={{ color: C.dim }}>•</span> <span onClick={() => { setChangePplM(true); setNewPplCount(String(pplLimit)); setNewPplNames([...pplNames]); while (pplNames.length < pplLimit) pplNames.push(""); }} style={{ color: C.cyan, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3 }}>{pplNames.length > 0 ? pplNames.join(", ") : `${pplLimit} ${pplLimit === 1 ? "person" : "people"}`} <Edit3 size={9} /></span></div>
         </div>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}><ThemeToggle /><B c={C.dim} o onClick={() => setCur(null)}><LogOut size={14} /> Logout</B></div>
@@ -611,8 +733,8 @@ function EmpP({ st, save, cur, setCur, bk }) {
     {/* Today - Per Person Breakdown */}
     <div style={crd()}>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Target size={15} color={C.amber} /> Today — {fmtDFull(td())} <span style={{ fontSize: 11, fontWeight: 500, color: C.sub }}>({tgt} per person)</span></div>
-      {!isWorkday(td()) && <div style={{ padding: "8px 12px", borderRadius: 8, background: C.amberD, color: C.amber, fontSize: 12, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
-        <Calendar size={13} /> {isWeekday(td()) ? `Holiday — ${(st.holidays||[]).find(h=>h.date===td())?.name || "Holiday"}` : "Weekend"} — this day won't count in your avg/day
+      {_holidays.includes(td()) && <div style={{ padding: "8px 12px", borderRadius: 8, background: C.amberD, color: C.amber, fontSize: 12, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+        <Calendar size={13} /> Holiday — {(st.holidays||[]).find(h=>h.date===td())?.name || "Holiday"}
       </div>}
       {todByPerson.length === 0 ? <div style={{ textAlign: "center", padding: 16, color: C.dim }}>No applications yet today</div> :
         <div style={{ display: "grid", gap: 8 }}>
@@ -637,8 +759,29 @@ function EmpP({ st, save, cur, setCur, bk }) {
         </div>
       }
     </div>
-    <EmpStats my={my} tgt={tgt} />
-    <div style={crd()}><div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Plus size={16} color={C.blue} /> Log Applications</div><div style={{ marginBottom: 12 }}><input type="date" value={dt} max={td()} onChange={e => setDt(e.target.value)} style={{ ...inp(), maxWidth: 170, colorScheme: C === DARK ? "dark" : "light" }} /></div>{rows.map((r,i) => <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}><input placeholder="Person name" value={r.p} onChange={e => { const n=[...rows]; n[i].p=e.target.value; setRows(n); }} style={{ ...inp(), flex: 2 }} /><input type="number" placeholder="Jobs" min="1" value={r.j} onChange={e => { const n=[...rows]; n[i].j=e.target.value; setRows(n); }} style={{ ...inp(), flex: 1, maxWidth: 90 }} />{rows.length > 1 && <button onClick={() => setRows(rows.filter((_,j)=>j!==i))} style={{ background: C.redD, border: "none", borderRadius: 6, padding: 6, cursor: "pointer" }}><Trash2 size={13} color={C.red} /></button>}</div>)}<div style={{ display: "flex", gap: 8, marginTop: 10 }}><Bs c={C.cyan} o onClick={() => setRows([...rows, { p: "", j: "" }])}><Plus size={12} /> Person</Bs><Bs c={C.green} onClick={submit}><Briefcase size={12} /> Submit</Bs></div>{dupWarn && <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 6, background: C.redD, color: C.red, fontSize: 11, display: "flex", alignItems: "center", gap: 5 }}><AlertTriangle size={13} /> {dupWarn}</div>}{okMsg && <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 6, background: C.greenD, color: C.green, fontSize: 11, display: "flex", alignItems: "center", gap: 5 }}><CheckCircle size={13} /> {okMsg}</div>}</div>
+    <EmpStats my={my} tgt={tgt} pplLimit={pplLimit} />
+    <div style={crd()}><div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Plus size={16} color={C.blue} /> Log Applications</div><div style={{ marginBottom: 12 }}><input type="date" value={dt} max={td()} onChange={e => setDt(e.target.value)} style={{ ...inp(), maxWidth: 170, colorScheme: C === DARK ? "dark" : "light" }} /></div>
+    {pplNames.length > 0 ? <>
+      {/* Fixed person names from registration */}
+      {pplNames.map((name, i) => {
+        const existing = st.entries.find(e => e.eid === cur && e.person === name && e.date === (dt || td()));
+        return <div key={name} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
+          <div style={{ flex: 2, padding: "10px 14px", borderRadius: 10, background: C.blueD, border: `1px solid ${C.blue}20`, fontSize: 13, fontWeight: 600, color: C.text }}>{name}</div>
+          <input type="number" placeholder="Jobs" min="1" value={rows[i]?.j || ""} onChange={e => { const n = [...rows]; if (!n[i]) n[i] = { p: name, j: "" }; n[i].p = name; n[i].j = e.target.value; setRows(n); }} style={{ ...inp(), flex: 1, maxWidth: 90 }} disabled={!!existing} />
+          {existing && <span style={{ fontSize: 9, color: C.green, whiteSpace: "nowrap" }}>✓ {existing.jobs}</span>}
+        </div>;
+      })}
+    </> : <>
+      {/* Legacy: no pplNames stored — use free text with datalist */}
+      {rows.map((r,i) => <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+        {knownPersons.length > 0 ? <div style={{ flex: 2, position: "relative" }}>
+          <input list={`plist-${i}`} placeholder="Select or type person name" value={r.p} onChange={e => { const n=[...rows]; n[i].p=e.target.value; setRows(n); }} style={inp()} />
+          <datalist id={`plist-${i}`}>{knownPersons.map(name => <option key={name} value={name} />)}</datalist>
+        </div> : <input placeholder="Person name" value={r.p} onChange={e => { const n=[...rows]; n[i].p=e.target.value; setRows(n); }} style={{ ...inp(), flex: 2 }} />}
+        <input type="number" placeholder="Jobs" min="1" value={r.j} onChange={e => { const n=[...rows]; n[i].j=e.target.value; setRows(n); }} style={{ ...inp(), flex: 1, maxWidth: 90 }} />{rows.length > 1 && <button onClick={() => setRows(rows.filter((_,j)=>j!==i))} style={{ background: C.redD, border: "none", borderRadius: 6, padding: 6, cursor: "pointer" }}><Trash2 size={13} color={C.red} /></button>}</div>)}
+      <Bs c={C.cyan} o onClick={() => setRows([...rows, { p: "", j: "" }])} style={{ marginRight: 8 }}><Plus size={12} /> Person</Bs>
+    </>}
+    <div style={{ display: "flex", gap: 8, marginTop: 10 }}><Bs c={C.green} onClick={submit}><Briefcase size={12} /> Submit</Bs></div>{dupWarn && <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 6, background: C.redD, color: C.red, fontSize: 11, display: "flex", alignItems: "center", gap: 5 }}><AlertTriangle size={13} /> {dupWarn}</div>}{okMsg && <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 6, background: C.greenD, color: C.green, fontSize: 11, display: "flex", alignItems: "center", gap: 5 }}><CheckCircle size={13} /> {okMsg}</div>}</div>
     {myP.length > 0 && <div style={crd()}>
       <div style={{ fontWeight: 700, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}><Users size={16} color={C.cyan} /> My People — Application Tracker</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(320px,1fr))", gap: 12 }}>
@@ -743,15 +886,17 @@ function EmpP({ st, save, cur, setCur, bk }) {
 
                   {/* Event timeline */}
                   {cEvts.length > 0 && <div style={{ borderLeft: `2px solid ${C.border}`, paddingLeft: 8, marginTop: 8 }}>
-                    {cEvts.slice(0, 3).map(ev => {
+                    {cEvts.slice(0, 5).map(ev => {
                       const et = gE(ev.type); const EI = et.i;
                       return <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3, fontSize: 10 }}>
                         <EI size={9} color={et.c} /><strong style={{ color: et.c }}>{et.l}</strong>
                         {ev.note && <span style={{ color: C.dim }}>— {ev.note}</span>}
                         <span style={{ color: C.dim, marginLeft: "auto", fontSize: 9 }}>{fmtD(ev.date)}</span>
+                        <button onClick={() => { setMyEvEdM(ev.id); setMyEvEdD({ company: ev.company, type: ev.type, date: ev.date, note: ev.note || "" }); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Edit3 size={9} color={C.blue} /></button>
+                        <button onClick={() => deleteMyEv(ev.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Trash2 size={9} color={C.dim} /></button>
                       </div>;
                     })}
-                    {cEvts.length > 3 && <div style={{ fontSize: 9, color: C.dim }}>+{cEvts.length - 3} more</div>}
+                    {cEvts.length > 5 && <div style={{ fontSize: 9, color: C.dim }}>+{cEvts.length - 5} more</div>}
                   </div>}
                 </div>;
               })}
@@ -795,17 +940,62 @@ function EmpP({ st, save, cur, setCur, bk }) {
       </div>
       <B c={C.green} onClick={saveMyEdit} style={{ width: "100%", justifyContent: "center" }}><CheckCircle size={13} /> Save Changes</B>
     </Mdl>
-    <div style={crd()}><div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Calendar size={16} color={C.violet} /> History</div>{my.length === 0 ? <div style={{ textAlign: "center", padding: 20, color: C.dim }}>No entries yet</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th style={tth()}>Date</th><th style={tth()}>Person</th><th style={tth()}>Status</th><th style={{ ...tth(), textAlign: "right" }}>Jobs</th><th style={{ ...tth(), textAlign: "center", width: 50 }}>Edit</th></tr></thead><tbody>{[...my].reverse().slice(0,50).map(e => { const s = gS(st.pstat?.[e.person]||"active"); const SI = s.i; const daysDiff = Math.floor((parseD(td()) - parseD(e.date)) / 86400000); const canEdit = daysDiff >= 0 && daysDiff <= 1; return <tr key={e.id}><td style={ttd()}>{fmtD(e.date)}</td><td style={ttd()}>{e.person}</td><td style={ttd()}><Tag c={s.c}><SI size={9} /> {s.l}</Tag></td><td style={{ ...ttd(), textAlign: "right", fontWeight: 700, color: C.green }}>{e.jobs}</td><td style={{ ...ttd(), textAlign: "center" }}>{canEdit ? <button onClick={() => { setEditId(e.id); setEditJobs(String(e.jobs)); }} style={{ background: `${C.blue}15`, border: `1px solid ${C.blue}30`, borderRadius: 5, padding: "3px 8px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3, color: C.blue, fontSize: 10, fontWeight: 600 }}><Edit3 size={10} /> Edit</button> : <span style={{ color: C.dim, fontSize: 9 }}>locked</span>}</td></tr>; })}</tbody></table></div>}</div>
+    <Mdl open={!!myEvEdM} onClose={() => setMyEvEdM(null)} title="Edit Event">
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>COMPANY</label><input value={myEvEdD.company||""} onChange={e => setMyEvEdD({...myEvEdD, company: e.target.value})} style={inp()} /></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>TYPE</label><select value={myEvEdD.type||"call"} onChange={e => setMyEvEdD({...myEvEdD, type: e.target.value})} style={{ ...inp(), appearance: "auto" }}>{EVTS().map(et => <option key={et.v} value={et.v}>{et.l}</option>)}</select></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>DATE</label><input type="date" value={myEvEdD.date||""} max={td()} onChange={e => setMyEvEdD({...myEvEdD, date: e.target.value})} style={{ ...inp(), colorScheme: C === DARK ? "dark" : "light" }} /></div>
+      <div style={{ marginBottom: 12 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>NOTES</label><input value={myEvEdD.note||""} onChange={e => setMyEvEdD({...myEvEdD, note: e.target.value})} style={inp()} /></div>
+      <B c={C.green} onClick={saveMyEvEdit} style={{ width: "100%", justifyContent: "center" }}><CheckCircle size={13} /> Save</B>
+    </Mdl>
+    <Mdl open={changePplM} onClose={() => setChangePplM(false)} title="Change People">
+      <div style={{ color: C.sub, fontSize: 12, marginBottom: 12 }}>Current: <strong style={{ color: C.text }}>{pplNames.length > 0 ? pplNames.join(", ") : `${pplLimit} ${pplLimit === 1 ? "person" : "people"}`}</strong></div>
+      {(() => {
+        const target = Number(newPplCount) || pplLimit;
+        const isIncrease = target > pplNames.length;
+        const isDecrease = target < pplNames.length && newPplNames.length === pplNames.length;
+        const decreased = target < pplNames.length && newPplNames.length < pplNames.length;
+        return <>
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {pplNames.length > 1 && <B c={C.red} o onClick={() => { setNewPplCount(String(pplNames.length - 1)); setNewPplNames([...pplNames]); }} style={{ flex: 1, justifyContent: "center" }}><Trash2 size={11} /> Remove a person</B>}
+            <B c={C.green} o onClick={() => { setNewPplCount(String(pplNames.length + 1)); setNewPplNames([...pplNames, ""]); }} style={{ flex: 1, justifyContent: "center" }}><Plus size={11} /> Add a person</B>
+          </div>
+          {isDecrease && <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.red, marginBottom: 8 }}>Which person to remove?</div>
+            {pplNames.map((name, i) => <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: 8, background: C.panel, border: `1px solid ${C.border}`, marginBottom: 4 }}>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{name}</span>
+              <Bs c={C.red} o onClick={() => { const kept = pplNames.filter((_, j) => j !== i); setNewPplNames(kept); setNewPplCount(String(kept.length)); }}><Trash2 size={10} /> Remove</Bs>
+            </div>)}
+          </div>}
+          {decreased && <div>
+            <div style={{ padding: "8px 12px", borderRadius: 8, background: C.greenD, color: C.green, fontSize: 12, marginBottom: 10 }}>Keeping: <strong>{newPplNames.join(", ")}</strong></div>
+            <B c={C.green} onClick={changePplCount} style={{ width: "100%", justifyContent: "center" }}><CheckCircle size={13} /> Confirm</B>
+          </div>}
+          {isIncrease && <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.green, marginBottom: 8 }}>Enter name for the new person:</div>
+            {newPplNames.map((name, i) => {
+              const isExisting = i < pplNames.length;
+              return <div key={i} style={{ marginBottom: 4 }}>
+                {isExisting ? <div style={{ padding: "10px 14px", borderRadius: 10, background: C.blueD, fontSize: 13, fontWeight: 600, color: C.text }}>{name}</div>
+                : <input placeholder="New person name" value={name} onChange={e => { const n = [...newPplNames]; n[i] = e.target.value; setNewPplNames(n); }} style={inp()} autoFocus />}
+              </div>;
+            })}
+            <B c={C.green} onClick={changePplCount} style={{ width: "100%", justifyContent: "center", marginTop: 8 }}><CheckCircle size={13} /> Confirm</B>
+          </div>}
+          {!isIncrease && !isDecrease && !decreased && <div style={{ textAlign: "center", color: C.dim, fontSize: 11, padding: 8 }}>Use the buttons above to add or remove a person.</div>}
+        </>;
+      })()}
+    </Mdl>
+    <div style={crd()}><div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Calendar size={16} color={C.violet} /> History</div>{my.length === 0 ? <div style={{ textAlign: "center", padding: 20, color: C.dim }}>No entries yet</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th style={tth()}>Date</th><th style={tth()}>Person</th><th style={tth()}>Status</th><th style={{ ...tth(), textAlign: "right" }}>Jobs</th><th style={{ ...tth(), textAlign: "center", width: 80 }}>Actions</th></tr></thead><tbody>{[...my].reverse().slice(0,50).map(e => { const s = gS(st.pstat?.[e.person]||"active"); const SI = s.i; const daysDiff = Math.floor((parseD(td()) - parseD(e.date)) / 86400000); const canEdit = daysDiff >= 0 && daysDiff <= 1; return <tr key={e.id}><td style={ttd()}>{fmtD(e.date)}</td><td style={ttd()}>{e.person}</td><td style={ttd()}><Tag c={s.c}><SI size={9} /> {s.l}</Tag></td><td style={{ ...ttd(), textAlign: "right", fontWeight: 700, color: C.green }}>{e.jobs}</td><td style={{ ...ttd(), textAlign: "center" }}>{canEdit ? <div style={{ display: "flex", gap: 3, justifyContent: "center" }}><button onClick={() => { setEditId(e.id); setEditJobs(String(e.jobs)); }} style={{ background: `${C.blue}15`, border: `1px solid ${C.blue}30`, borderRadius: 5, padding: "3px 8px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3, color: C.blue, fontSize: 10, fontWeight: 600 }}><Edit3 size={10} /></button><button onClick={() => save({ ...st, entries: st.entries.filter(x => x.id !== e.id) })} style={{ background: `${C.red}10`, border: `1px solid ${C.red}25`, borderRadius: 5, padding: "3px 8px", cursor: "pointer", display: "inline-flex", alignItems: "center", color: C.red, fontSize: 10 }}><Trash2 size={10} /></button></div> : <span style={{ color: C.dim, fontSize: 9 }}>locked</span>}</td></tr>; })}</tbody></table></div>}</div>
   </div></div>;
 }
 
 function Adm({ st, save, tab, setTab, out, ref2 }) {
-  const [addM, setAddM] = useState(false); const [an, setAn] = useState(""); const [ap, setAp] = useState("");
+  const [addM, setAddM] = useState(false); const [an, setAn] = useState(""); const [ap, setAp] = useState(""); const [anPpl, setAnPpl] = useState("1"); const [anPplNames, setAnPplNames] = useState([""]);
   const [exp, setExp] = useState(null);
   const [edM, setEdM] = useState(null); const [edD, setEdD] = useState({});
   const [rpM, setRpM] = useState(null); const [rpV, setRpV] = useState("");
-  const [ff, setFf] = useState(""); const [ft, setFt] = useState("");
   const [sd, setSd] = useState("");
+  const [dashDate, setDashDate] = useState(td());
   const [pdfFrom, setPdfFrom] = useState(""); const [pdfTo, setPdfTo] = useState("");
   const [pdfEmp, setPdfEmp] = useState("");
   const [np2, setNp2] = useState(""); const [nt, setNt] = useState("");
@@ -813,20 +1003,27 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
   const [resetStep, setResetStep] = useState(0);
   const [resetPin, setResetPin] = useState("");
   const [holDate, setHolDate] = useState(""); const [holName, setHolName] = useState("");
-  const [reassign, setReassign] = useState(null); // { person: "John", fromEid: "abc" }
+  const [reassign, setReassign] = useState(null);
   const [reassignTo, setReassignTo] = useState("");
+  const [evEdM, setEvEdM] = useState(null); const [evEdD, setEvEdD] = useState({});
+  const [addEntM, setAddEntM] = useState(false); const [addEntEid, setAddEntEid] = useState(""); const [addEntPerson, setAddEntPerson] = useState(""); const [addEntJobs, setAddEntJobs] = useState(""); const [addEntDate, setAddEntDate] = useState(td());
+  const [addEvM, setAddEvM] = useState(false); const [addEvEid, setAddEvEid] = useState(""); const [addEvPerson, setAddEvPerson] = useState(""); const [addEvType, setAddEvType] = useState("call"); const [addEvComp, setAddEvComp] = useState(""); const [addEvNote, setAddEvNote] = useState(""); const [addEvDate, setAddEvDate] = useState(td());
+  const [renameM, setRenameM] = useState(null); const [renameName, setRenameName] = useState("");
+  const [editPplM, setEditPplM] = useState(null); const [editPplNames, setEditPplNames] = useState([]);
+  const [personEdM, setPersonEdM] = useState(null); const [personEdName, setPersonEdName] = useState(""); const [personEdStat, setPersonEdStat] = useState("active");
+  const [compRenameM, setCompRenameM] = useState(null); const [compRenameName, setCompRenameName] = useState("");
   const tgt = st.target || 30;
 
-  const fil = useMemo(() => { let e = st.entries.filter(x => x.date <= td()); if (ff) e = e.filter(x => x.date >= ff); if (ft) e = e.filter(x => x.date <= ft); return e; }, [st.entries, ff, ft]);
+  const fil = useMemo(() => st.entries.filter(x => x.date <= td()), [st.entries]);
   const es = useMemo(() => st.emps.map(em => {
     const ents = fil.filter(x => x.eid === em.id); const jobs = ents.reduce((a,x)=>a+x.jobs,0); const ppl = new Set(ents.map(x=>x.person)).size;
     const todJ = st.entries.filter(x => x.eid === em.id && x.date === td()).reduce((a,x)=>a+x.jobs,0);
     const stars = st.stars?.[em.id]||0; const evts = (st.events||[]).filter(x => x.eid === em.id);
     const byD = {}; ents.forEach(x => { if (!byD[x.date]) byD[x.date] = { jobs: 0, ppl: {} }; byD[x.date].jobs += x.jobs; byD[x.date].ppl[x.person] = (byD[x.date].ppl[x.person]||0) + x.jobs; });
-    // Precise avg/day: for each person this employee applies for, calc that person's avg (working days only - excludes weekends & holidays), then average all
+    // Avg/day: per person, total apps / weekdays they submitted on
     const personAvgs = {};
-    ents.forEach(x => { if (!personAvgs[x.person]) personAvgs[x.person] = { total: 0, days: new Set() }; personAvgs[x.person].total += x.jobs; personAvgs[x.person].days.add(x.date); });
-    const perPersonAvgs = Object.values(personAvgs).map(p => p.days.size > 0 ? p.total / p.days.size : 0);
+    ents.forEach(x => { if (!personAvgs[x.person]) personAvgs[x.person] = { total: 0, dates: [] }; personAvgs[x.person].total += x.jobs; personAvgs[x.person].dates.push(x.date); });
+    const perPersonAvgs = Object.values(personAvgs).map(p => { const wd = countWeekdaysIn(p.dates); return p.total / wd; });
     const avgDay = perPersonAvgs.length > 0 ? Math.round(perPersonAvgs.reduce((a,v) => a+v, 0) / perPersonAvgs.length) : 0;
     return { ...em, ents, jobs, ppl, todJ, stars, evts, byD, avgDay };
   }), [st, fil]);
@@ -850,15 +1047,46 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
     return { d, tot: de.reduce((a,x)=>a+x.jobs,0), ec: Object.keys(byE).length, byE, evs: dv };
   }, [sd, st]);
 
-  const addE = () => { if (!an.trim()||ap.length<4) return; save({ ...st, emps: [...st.emps, { id: uid(), name: an.trim(), pw: ap, dt: td() }] }); setAn(""); setAp(""); setAddM(false); };
+  const addE = () => { if (!an.trim()||ap.length<4) return; const names = anPplNames.filter(n => n.trim()).map(n => n.trim()); if (names.length !== Number(anPpl)) return; save({ ...st, emps: [...st.emps, { id: uid(), name: an.trim(), pw: ap, dt: td(), pplCount: Number(anPpl) || 1, pplNames: names }] }); setAn(""); setAp(""); setAnPpl("1"); setAnPplNames([""]); setAddM(false); };
   const rmE = i => {
     // Soft delete - mark as removed with date, keep all records
     save({ ...st, emps: st.emps.map(x => x.id === i ? { ...x, removed: td() } : x) });
   };
   const restoreE = i => save({ ...st, emps: st.emps.map(x => x.id === i ? { ...x, removed: undefined } : x) });
   const rmEn = i => save({ ...st, entries: st.entries.filter(x=>x.id!==i) });
+  const rmEv = i => save({ ...st, events: (st.events||[]).filter(x=>x.id!==i) });
   const savEd = () => { if (!edM) return; save({ ...st, entries: st.entries.map(x=>x.id===edM?{...x,...edD}:x) }); setEdM(null); };
+  const savEvEd = () => { if (!evEdM) return; save({ ...st, events: (st.events||[]).map(x=>x.id===evEdM?{...x,...evEdD}:x) }); setEvEdM(null); };
   const rstPw = () => { if (!rpM||rpV.length<4) return; save({ ...st, emps: st.emps.map(x=>x.id===rpM?{...x,pw:rpV}:x) }); setRpM(null); setRpV(""); };
+  const renameE = () => { if (!renameM || !renameName.trim()) return; save({ ...st, emps: st.emps.map(x => x.id === renameM ? { ...x, name: renameName.trim() } : x) }); setRenameM(null); setRenameName(""); };
+  const saveEditPpl = () => {
+    if (!editPplM) return;
+    const names = editPplNames.filter(n => n.trim()).map(n => n.trim());
+    if (!names.length) return;
+    save({ ...st, emps: st.emps.map(x => x.id === editPplM ? { ...x, pplCount: names.length, pplNames: names } : x) });
+    setEditPplM(null); setEditPplNames([]);
+  };
+  const hardDeleteE = (i) => { save({ ...st, emps: st.emps.filter(x => x.id !== i), entries: st.entries.filter(x => x.eid !== i), events: (st.events||[]).filter(x => x.eid !== i), stars: { ...(st.stars||{}), [i]: undefined } }); };
+  const renamePerson = () => {
+    if (!personEdM || !personEdName.trim()) return;
+    const oldName = personEdM; const newName = personEdName.trim();
+    const updated = {
+      ...st,
+      entries: st.entries.map(e => e.person === oldName ? { ...e, person: newName } : e),
+      events: (st.events||[]).map(e => e.person === oldName ? { ...e, person: newName } : e),
+      pstat: (() => { const ps = { ...st.pstat }; if (ps[oldName] !== undefined) { ps[newName] = personEdStat || ps[oldName]; delete ps[oldName]; } else { ps[newName] = personEdStat || "active"; } return ps; })(),
+    };
+    save(updated); setPersonEdM(null); setPersonEdName(""); setPersonEdStat("active");
+  };
+  const changePersonStatus = (personName, newStatus) => { save({ ...st, pstat: { ...st.pstat, [personName]: newStatus } }); };
+  const renameCompany = () => {
+    if (!compRenameM || !compRenameName.trim()) return;
+    const oldComp = compRenameM.company; const newComp = compRenameName.trim(); const person = compRenameM.person;
+    save({ ...st, events: (st.events||[]).map(e => e.person === person && e.company === oldComp ? { ...e, company: newComp } : e) });
+    setCompRenameM(null); setCompRenameName("");
+  };
+  const adminAddEntry = () => { if (!addEntEid || !addEntPerson.trim() || !Number(addEntJobs)) return; const ne = { id: uid(), eid: addEntEid, person: addEntPerson.trim(), jobs: Number(addEntJobs), date: addEntDate || td() }; const ps = { ...st.pstat }; if (!ps[ne.person]) ps[ne.person] = "active"; save({ ...st, entries: [...st.entries, ne], pstat: ps }); setAddEntM(false); setAddEntEid(""); setAddEntPerson(""); setAddEntJobs(""); setAddEntDate(td()); };
+  const adminAddEvent = () => { if (!addEvEid || !addEvPerson.trim() || !addEvComp.trim()) return; const ev = { id: uid(), eid: addEvEid, person: addEvPerson.trim(), type: addEvType, company: addEvComp.trim(), note: addEvNote.trim(), date: addEvDate || td() }; let ns = { ...st, events: [...(st.events||[]), ev] }; if (addEvType === "placed") { ns.pstat = { ...ns.pstat, [addEvPerson.trim()]: "placed" }; ns.stars = { ...ns.stars, [addEvEid]: ((ns.stars||{})[addEvEid]||0)+1 }; } save(ns); setAddEvM(false); setAddEvEid(""); setAddEvPerson(""); setAddEvType("call"); setAddEvComp(""); setAddEvNote(""); setAddEvDate(td()); };
   const setPS = (n,v) => save({ ...st, pstat: { ...st.pstat, [n]: v } });
   const doReassign = () => {
     if (!reassign || !reassignTo || reassignTo === reassign.fromEid) return;
@@ -893,11 +1121,15 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}><ThemeToggle /><B c={C.violet} o onClick={()=>doExport(st)}><Download size={14} /> CSV</B><B c={C.cyan} o onClick={ref2}><Activity size={14} /> Refresh</B><B c={C.red} o onClick={out}><LogOut size={14} /> Logout</B></div>
     </div>
     <div style={{ display: "flex", gap: 3, marginBottom: 22, overflowX: "auto", paddingBottom: 2, background: C.panel, borderRadius: 12, padding: 4, border: `1px solid ${C.border}` }}>{tabs.map(t=><Tb key={t.id} a={tab===t.id} onClick={()=>setTab(t.id)}><t.i size={12} style={{ marginRight: 4, verticalAlign: "middle" }} /> {t.l}</Tb>)}</div>
-    {["dash","team","people"].includes(tab) && <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}><Filter size={12} color={C.dim} /><input type="date" value={ff} onChange={e=>setFf(e.target.value)} style={{ ...inp(), maxWidth: 140, padding: "4px 8px", fontSize: 11, colorScheme: C === DARK ? "dark" : "light" }} /><span style={{ color: C.dim, fontSize: 10 }}>to</span><input type="date" value={ft} onChange={e=>setFt(e.target.value)} style={{ ...inp(), maxWidth: 140, padding: "4px 8px", fontSize: 11, colorScheme: C === DARK ? "dark" : "light" }} />{(ff||ft)&&<Bs c={C.red} o onClick={()=>{setFf("");setFt("");}}>Clear</Bs>}</div>}
-
     <Mdl open={!!edM} onClose={()=>setEdM(null)} title="Edit Entry"><input value={edD.person||""} onChange={e=>setEdD({...edD,person:e.target.value})} placeholder="Person" style={{ ...inp(), marginBottom: 8 }} /><input type="number" value={edD.jobs||""} onChange={e=>setEdD({...edD,jobs:Number(e.target.value)})} placeholder="Jobs" style={{ ...inp(), marginBottom: 8 }} /><input type="date" value={edD.date||""} onChange={e=>setEdD({...edD,date:e.target.value})} style={{ ...inp(), colorScheme: C === DARK ? "dark" : "light", marginBottom: 12 }} /><B c={C.green} onClick={savEd} style={{ width: "100%", justifyContent: "center" }}><CheckCircle size={13} /> Save</B></Mdl>
     <Mdl open={!!rpM} onClose={()=>setRpM(null)} title="Reset Password"><p style={{ color: C.sub, fontSize: 12, marginBottom: 10 }}>For: <strong style={{ color: C.text }}>{st.emps.find(x=>x.id===rpM)?.name}</strong></p><input type="text" placeholder="New password (4+)" value={rpV} onChange={e=>setRpV(e.target.value)} style={{ ...inp(), marginBottom: 12 }} /><B c={C.green} onClick={rstPw} style={{ width: "100%", justifyContent: "center" }}><Key size={13} /> Reset</B></Mdl>
-    <Mdl open={addM} onClose={()=>setAddM(false)} title="Add Employee"><input placeholder="Name" value={an} onChange={e=>setAn(e.target.value)} style={{ ...inp(), marginBottom: 6 }} /><input placeholder="Password (4+)" value={ap} onChange={e=>setAp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addE()} style={{ ...inp(), marginBottom: 12 }} /><B c={C.green} onClick={addE} style={{ width: "100%", justifyContent: "center" }}><UserPlus size={13} /> Add</B></Mdl>
+    <Mdl open={addM} onClose={()=>setAddM(false)} title="Add Employee">
+      <input placeholder="Employee name" value={an} onChange={e=>setAn(e.target.value)} style={{ ...inp(), marginBottom: 6 }} />
+      <input placeholder="Password (4+)" value={ap} onChange={e=>setAp(e.target.value)} style={{ ...inp(), marginBottom: 6 }} />
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>HOW MANY PEOPLE?</label><select value={anPpl} onChange={e => { const v = Number(e.target.value); setAnPpl(String(v)); const cur = [...anPplNames]; while (cur.length < v) cur.push(""); setAnPplNames(cur.slice(0, v)); }} style={{ ...inp(), appearance: "auto" }}>{[1,2,3,4,5].map(n => <option key={n} value={n}>{n} {n === 1 ? "person" : "people"}</option>)}</select></div>
+      {anPplNames.map((name, i) => <div key={i} style={{ marginBottom: 4 }}><input placeholder={`Person ${anPplNames.length > 1 ? i+1 : ""} name`} value={name} onChange={e => { const n = [...anPplNames]; n[i] = e.target.value; setAnPplNames(n); }} style={inp()} /></div>)}
+      <B c={C.green} onClick={addE} style={{ width: "100%", justifyContent: "center", marginTop: 8 }}><UserPlus size={13} /> Add Employee</B>
+    </Mdl>
     <Mdl open={!!reassign} onClose={() => { setReassign(null); setReassignTo(""); }} title={`Reassign — ${reassign?.person}`}>
       {reassign && (() => {
         const fromEmp = st.emps.find(x => x.id === reassign.fromEid);
@@ -924,60 +1156,143 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
       })()}
     </Mdl>
 
+    {/* Event Edit Modal */}
+    <Mdl open={!!evEdM} onClose={() => setEvEdM(null)} title="Edit Event">
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>COMPANY</label><input value={evEdD.company||""} onChange={e => setEvEdD({...evEdD, company: e.target.value})} style={inp()} /></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>TYPE</label><select value={evEdD.type||"call"} onChange={e => setEvEdD({...evEdD, type: e.target.value})} style={{ ...inp(), appearance: "auto" }}>{EVTS().map(et => <option key={et.v} value={et.v}>{et.l}</option>)}</select></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>DATE</label><input type="date" value={evEdD.date||""} onChange={e => setEvEdD({...evEdD, date: e.target.value})} style={{ ...inp(), colorScheme: C === DARK ? "dark" : "light" }} /></div>
+      <div style={{ marginBottom: 12 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>NOTES</label><input value={evEdD.note||""} onChange={e => setEvEdD({...evEdD, note: e.target.value})} style={inp()} /></div>
+      <B c={C.green} onClick={savEvEd} style={{ width: "100%", justifyContent: "center" }}><CheckCircle size={13} /> Save Event</B>
+    </Mdl>
+
+    {/* Admin Add Entry Modal */}
+    <Mdl open={addEntM} onClose={() => setAddEntM(false)} title="Add Application Entry">
+      <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>Add applications on behalf of any employee.</div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>EMPLOYEE</label><select value={addEntEid} onChange={e => setAddEntEid(e.target.value)} style={{ ...inp(), appearance: "auto" }}><option value="">Select...</option>{st.emps.filter(e => !e.removed).map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>PERSON NAME</label><input value={addEntPerson} onChange={e => setAddEntPerson(e.target.value)} placeholder="Person name" style={inp()} /></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>APPLICATIONS</label><input type="number" min="1" value={addEntJobs} onChange={e => setAddEntJobs(e.target.value)} placeholder="Number of applications" style={inp()} /></div>
+      <div style={{ marginBottom: 12 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>DATE</label><input type="date" value={addEntDate} onChange={e => setAddEntDate(e.target.value)} style={{ ...inp(), colorScheme: C === DARK ? "dark" : "light" }} /></div>
+      <B c={C.green} onClick={adminAddEntry} style={{ width: "100%", justifyContent: "center" }}><Plus size={13} /> Add Entry</B>
+    </Mdl>
+
+    {/* Admin Add Event Modal */}
+    <Mdl open={addEvM} onClose={() => setAddEvM(false)} title="Add Pipeline Event">
+      <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>Add a call, interview, or placement on behalf of any employee.</div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>EMPLOYEE</label><select value={addEvEid} onChange={e => setAddEvEid(e.target.value)} style={{ ...inp(), appearance: "auto" }}><option value="">Select...</option>{st.emps.filter(e => !e.removed).map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>PERSON NAME</label><input value={addEvPerson} onChange={e => setAddEvPerson(e.target.value)} placeholder="Person name" style={inp()} /></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>TYPE</label><div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{EVTS().map(et => { const EI = et.i; return <Bs key={et.v} c={et.c} o={addEvType !== et.v} onClick={() => setAddEvType(et.v)}><EI size={10} /> {et.l}</Bs>; })}</div></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>COMPANY</label><input value={addEvComp} onChange={e => setAddEvComp(e.target.value)} placeholder="Company name" style={inp()} /></div>
+      <div style={{ marginBottom: 8 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>DATE</label><input type="date" value={addEvDate} onChange={e => setAddEvDate(e.target.value)} style={{ ...inp(), colorScheme: C === DARK ? "dark" : "light" }} /></div>
+      <div style={{ marginBottom: 12 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>NOTES</label><input value={addEvNote} onChange={e => setAddEvNote(e.target.value)} placeholder="Optional" style={inp()} /></div>
+      <B c={C.green} onClick={adminAddEvent} style={{ width: "100%", justifyContent: "center" }}><Plus size={13} /> Add Event</B>
+    </Mdl>
+
+    {/* Rename Employee Modal */}
+    <Mdl open={!!renameM} onClose={() => setRenameM(null)} title="Rename Employee">
+      <p style={{ color: C.sub, fontSize: 12, marginBottom: 10 }}>Current name: <strong style={{ color: C.text }}>{st.emps.find(x => x.id === renameM)?.name}</strong></p>
+      <input placeholder="New name" value={renameName} onChange={e => setRenameName(e.target.value)} onKeyDown={e => e.key === "Enter" && renameE()} style={{ ...inp(), marginBottom: 12 }} />
+      <B c={C.green} onClick={renameE} style={{ width: "100%", justifyContent: "center" }}><CheckCircle size={13} /> Rename</B>
+    </Mdl>
+
+    {/* Edit Employee's People Names */}
+    <Mdl open={!!editPplM} onClose={() => setEditPplM(null)} title={`Edit People — ${st.emps.find(x => x.id === editPplM)?.name}`}>
+      <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>Edit the person names this employee applies for. You can add or remove people.</div>
+      {editPplNames.map((name, i) => <div key={i} style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "center" }}>
+        <input value={name} onChange={e => { const n = [...editPplNames]; n[i] = e.target.value; setEditPplNames(n); }} placeholder={`Person ${editPplNames.length > 1 ? i + 1 : ""} name`} style={{ ...inp(), flex: 1 }} />
+        {editPplNames.length > 1 && <button onClick={() => setEditPplNames(editPplNames.filter((_, j) => j !== i))} style={{ background: C.redD, border: "none", borderRadius: 6, padding: 6, cursor: "pointer", flexShrink: 0 }}><Trash2 size={12} color={C.red} /></button>}
+      </div>)}
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <Bs c={C.cyan} o onClick={() => setEditPplNames([...editPplNames, ""])}><Plus size={10} /> Add Person</Bs>
+      </div>
+      <B c={C.green} onClick={saveEditPpl} style={{ width: "100%", justifyContent: "center", marginTop: 12 }}><CheckCircle size={13} /> Save</B>
+    </Mdl>
+
+    {/* Edit Person Modal — full admin control */}
+    <Mdl open={!!personEdM} onClose={() => setPersonEdM(null)} title={`Edit Person — ${personEdM}`}>
+      {personEdM && (() => {
+        const pEntries = st.entries.filter(e => e.person === personEdM);
+        const pEvents = (st.events||[]).filter(e => e.person === personEdM);
+        const pTotal = pEntries.reduce((a,x) => a + x.jobs, 0);
+        const pDays = countWorkdays([...new Set(pEntries.map(e => e.date))]);
+        const pEmps = [...new Set(pEntries.map(e => st.emps.find(x => x.id === e.eid)?.name || "?"))];
+        const pComps = [...new Set(pEvents.map(e => e.company))];
+        return <>
+          {/* Summary */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 6, marginBottom: 14 }}>
+            <div style={{ padding: "6px 8px", borderRadius: 6, background: C.greenD, textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: C.green }}>{pTotal}</div><div style={{ fontSize: 8, color: C.dim }}>Applications</div></div>
+            <div style={{ padding: "6px 8px", borderRadius: 6, background: C.blueD, textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: C.blue }}>{pDays}</div><div style={{ fontSize: 8, color: C.dim }}>Working Days</div></div>
+            <div style={{ padding: "6px 8px", borderRadius: 6, background: C.cyanD, textAlign: "center" }}><div style={{ fontSize: 16, fontWeight: 800, color: C.cyan }}>{pEvents.length}</div><div style={{ fontSize: 8, color: C.dim }}>Events</div></div>
+          </div>
+          <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>Applied by: {pEmps.join(", ")}{pComps.length > 0 && ` • Companies: ${pComps.join(", ")}`}</div>
+          <div style={{ marginBottom: 10 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>PERSON NAME</label><input value={personEdName} onChange={e => setPersonEdName(e.target.value)} placeholder="Person name" style={inp()} /></div>
+          <div style={{ marginBottom: 12 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>STATUS</label><div style={{ display: "flex", gap: 4 }}>{STAT().map(s => { const SI = s.i; return <Bs key={s.v} c={s.c} o={personEdStat !== s.v} onClick={() => setPersonEdStat(s.v)}><SI size={10} /> {s.l}</Bs>; })}</div></div>
+          <div style={{ fontSize: 11, color: C.sub, marginBottom: 12 }}>Renaming updates across all entries, events, and pipeline data.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <B c={C.green} onClick={renamePerson} style={{ flex: 1, justifyContent: "center" }}><CheckCircle size={13} /> Save Changes</B>
+            <B c={C.red} o onClick={() => { save({ ...st, entries: st.entries.filter(e => e.person !== personEdM), events: (st.events||[]).filter(e => e.person !== personEdM), pstat: (() => { const ps = {...st.pstat}; delete ps[personEdM]; return ps; })() }); setPersonEdM(null); }} style={{ justifyContent: "center" }}><Trash2 size={13} /> Delete Person</B>
+          </div>
+        </>;
+      })()}
+    </Mdl>
+
+    {/* Rename Company Modal */}
+    <Mdl open={!!compRenameM} onClose={() => setCompRenameM(null)} title={`Rename Company — ${compRenameM?.company}`}>
+      <div style={{ fontSize: 12, color: C.sub, marginBottom: 10 }}>For person: <strong style={{ color: C.text }}>{compRenameM?.person}</strong></div>
+      <div style={{ marginBottom: 12 }}><label style={{ fontSize: 10, fontWeight: 600, color: C.dim, display: "block", marginBottom: 4 }}>NEW COMPANY NAME</label><input value={compRenameName} onChange={e => setCompRenameName(e.target.value)} onKeyDown={e => e.key === "Enter" && renameCompany()} placeholder="Company name" style={inp()} /></div>
+      <B c={C.green} onClick={renameCompany} style={{ width: "100%", justifyContent: "center" }}><CheckCircle size={13} /> Rename Company</B>
+    </Mdl>
+
     {tab === "dash" && <div style={{ animation: "fi .3s" }}>
+
+      {/* Admin Quick Actions */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        <Bs c={C.green} onClick={() => setAddEntM(true)}><Plus size={10} /> Add Entry</Bs>
+        <Bs c={C.cyan} onClick={() => setAddEvM(true)}><Plus size={10} /> Add Event</Bs>
+      </div>
 
       {/* ── ROW 1: Key numbers ── */}
       {(() => {
-        const todayTotal = st.entries.filter(e => e.date === td()).reduce((a, x) => a + x.jobs, 0);
-        const todayActive = new Set(st.entries.filter(e => e.date === td()).map(e => e.eid)).size;
+        const ddEntries = st.entries.filter(e => e.date === dashDate);
+        const dayTotal = ddEntries.reduce((a, x) => a + x.jobs, 0);
+        const dayActive = new Set(ddEntries.map(e => e.eid)).size;
         const allPpl = new Set(st.entries.map(e => e.person)).size;
-        // Precise avg: for each person, calc their own daily avg, then average all persons
-        const personMap = {};
-        st.entries.filter(e => e.date <= td()).forEach(e => {
-          if (!personMap[e.person]) personMap[e.person] = { total: 0, days: new Set() };
-          personMap[e.person].total += e.jobs; personMap[e.person].days.add(e.date);
-        });
-        const personAvgs = Object.values(personMap).map(p => p.days.size > 0 ? p.total / p.days.size : 0);
-        const avgPerDay = personAvgs.length > 0 ? Math.round(personAvgs.reduce((a,v) => a+v, 0) / personAvgs.length) : 0;
         const activeCount = activeEs.length;
         return <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 18 }}>
           <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.border}`, padding: 16, textAlign: "center" }}>
-            <div style={{ fontSize: 28, fontWeight: 800, color: C.green }}>{todayTotal}</div>
-            <div style={{ fontSize: 10, color: C.sub, marginTop: 2 }}>Applications — {fmtD(td())}</div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: C.green }}>{dayTotal}</div>
+            <div style={{ fontSize: 10, color: C.sub, marginTop: 2 }}>Applications — {fmtD(dashDate)}</div>
           </div>
           <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.border}`, padding: 16, textAlign: "center" }}>
-            <div style={{ fontSize: 28, fontWeight: 800, color: C.blue }}>{todayActive}/{activeCount}</div>
-            <div style={{ fontSize: 10, color: C.sub, marginTop: 2 }}>Employees Active Today</div>
+            <div style={{ fontSize: 28, fontWeight: 800, color: C.blue }}>{dayActive}/{activeCount}</div>
+            <div style={{ fontSize: 10, color: C.sub, marginTop: 2 }}>Employees Active</div>
           </div>
           <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.border}`, padding: 16, textAlign: "center" }}>
             <div style={{ fontSize: 28, fontWeight: 800, color: C.cyan }}>{allPpl}</div>
             <div style={{ fontSize: 10, color: C.sub, marginTop: 2 }}>Total People</div>
           </div>
-          <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.border}`, padding: 16, textAlign: "center" }}>
-            <div style={{ fontSize: 28, fontWeight: 800, color: C.amber }}>{avgPerDay}</div>
-            <div style={{ fontSize: 10, color: C.sub, marginTop: 2 }}>Avg/Day Per Person</div>
-          </div>
         </div>;
       })()}
 
-      {/* ── ROW 2: Today's Employee Status ── */}
+      {/* ── ROW 2: Employee Status for selected date ── */}
       <div style={crd()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}><Target size={16} color={C.amber} /> Today — {fmtDFull(td())}</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {!isWorkday(td()) && <div style={{ padding: "4px 12px", borderRadius: 20, background: C.amberD, display: "flex", alignItems: "center", gap: 4 }}><Calendar size={10} color={C.amber} /><span style={{ fontSize: 11, fontWeight: 600, color: C.amber }}>{isWeekday(td()) ? (st.holidays||[]).find(h=>h.date===td())?.name || "Holiday" : "Weekend"}</span></div>}
-            <div style={{ padding: "4px 12px", borderRadius: 20, background: C.greenD, display: "flex", alignItems: "center", gap: 4 }}><CheckCircle size={10} color={C.green} /><span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>{hitT}</span><span style={{ fontSize: 9, color: C.sub }}>met</span></div>
-            <div style={{ padding: "4px 12px", borderRadius: 20, background: C.amberD, display: "flex", alignItems: "center", gap: 4 }}><AlertTriangle size={10} color={C.amber} /><span style={{ fontSize: 12, fontWeight: 800, color: C.amber }}>{activeEs.filter(x=>x.todJ>0&&x.todJ<tgt).length}</span><span style={{ fontSize: 9, color: C.sub }}>below</span></div>
-            <div style={{ padding: "4px 12px", borderRadius: 20, background: C.redD, display: "flex", alignItems: "center", gap: 4 }}><XCircle size={10} color={C.red} /><span style={{ fontSize: 12, fontWeight: 800, color: C.red }}>{activeEs.filter(x=>x.todJ===0).length}</span><span style={{ fontSize: 9, color: C.sub }}>none</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}><Target size={16} color={C.amber} /> {dashDate === td() ? "Today" : fmtDFull(dashDate)}</div>
+          <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+            {_holidays.includes(dashDate) && <div style={{ padding: "4px 12px", borderRadius: 20, background: C.amberD, display: "flex", alignItems: "center", gap: 4 }}><Calendar size={10} color={C.amber} /><span style={{ fontSize: 11, fontWeight: 600, color: C.amber }}>{(st.holidays||[]).find(h=>h.date===dashDate)?.name || "Holiday"}</span></div>}
+            {(() => { const dd = new Date(); dd.setDate(dd.getDate() - 1); const yest = `${dd.getFullYear()}-${String(dd.getMonth()+1).padStart(2,"0")}-${String(dd.getDate()).padStart(2,"0")}`; return <>
+              <Bs c={dashDate === td() ? C.blue : C.dim} o={dashDate !== td()} onClick={() => setDashDate(td())}>Today</Bs>
+              <Bs c={dashDate === yest ? C.blue : C.dim} o={dashDate !== yest} onClick={() => setDashDate(yest)}>Yesterday</Bs>
+            </>; })()}
+            <input type="date" value={dashDate} max={td()} onChange={e => setDashDate(e.target.value)} style={{ ...inp(), maxWidth: 130, padding: "3px 8px", fontSize: 11, colorScheme: C === DARK ? "dark" : "light" }} />
           </div>
         </div>
 
-        {/* Employee cards instead of table */}
+        {/* Employee cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 10 }}>
           {(() => {
-            const todayEntries = st.entries.filter(e => e.date === td());
+            const dayEntries = st.entries.filter(e => e.date === dashDate);
             const byEmp = {};
-            todayEntries.forEach(e => {
+            dayEntries.forEach(e => {
               const emp = st.emps.find(x => x.id === e.eid);
               if (!emp) return;
               if (!byEmp[e.eid]) byEmp[e.eid] = { name: emp.name, id: emp.id, people: {}, total: 0 };
@@ -1127,7 +1442,7 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
         <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>These employees have been removed. Their historical data is preserved for accurate reporting.</div>
         {removedEs.map(em => <div key={em.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: 8, background: C.panel, border: `1px solid ${C.border}`, marginBottom: 4 }}>
           <div><span style={{ fontWeight: 600, fontSize: 12 }}>{em.name}</span><span style={{ fontSize: 10, color: C.dim, marginLeft: 8 }}>Removed: {fmtD(em.removed)}</span><span style={{ fontSize: 10, color: C.sub, marginLeft: 8 }}>{em.jobs} total applications</span></div>
-          <Bs c={C.green} onClick={() => restoreE(em.id)}>Restore</Bs>
+          <div style={{ display: "flex", gap: 4 }}><Bs c={C.green} onClick={() => restoreE(em.id)}>Restore</Bs><Bs c={C.red} o onClick={() => hardDeleteE(em.id)}><Trash2 size={10} /> Permanently Delete</Bs></div>
         </div>)}
       </div>}
 
@@ -1156,7 +1471,7 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
               </div>}
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 14, fontWeight: 700, color: C.green }}>{em.jobs}</div><div style={{ fontSize: 8, color: C.dim }}>TOTAL</div></div><div style={{ textAlign: "center" }}><div style={{ fontSize: 14, fontWeight: 700, color: C.cyan }}>{em.ppl}</div><div style={{ fontSize: 8, color: C.dim }}>PEOPLE</div></div><Bs c={C.amber} o onClick={e=>{e.stopPropagation();setRpM(em.id);}}><Key size={10} /></Bs><Bs c={C.red} o onClick={e=>{e.stopPropagation();rmE(em.id);}}><Trash2 size={10} /></Bs>{exp===em.id?<ChevronDown size={13} color={C.dim}/>:<ChevronRight size={13} color={C.dim}/>}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 14, fontWeight: 700, color: C.green }}>{em.jobs}</div><div style={{ fontSize: 8, color: C.dim }}>TOTAL</div></div><div style={{ textAlign: "center" }}><div style={{ fontSize: 14, fontWeight: 700, color: C.cyan }}>{em.ppl}</div><div style={{ fontSize: 8, color: C.dim }}>PEOPLE</div></div><Bs c={C.blue} o onClick={e=>{e.stopPropagation();setRenameM(em.id);setRenameName(em.name);}}><Edit3 size={10} /></Bs><Bs c={C.amber} o onClick={e=>{e.stopPropagation();setRpM(em.id);}}><Key size={10} /></Bs><Bs c={C.red} o onClick={e=>{e.stopPropagation();rmE(em.id);}}><Trash2 size={10} /></Bs>{exp===em.id?<ChevronDown size={13} color={C.dim}/>:<ChevronRight size={13} color={C.dim}/>}</div>
         </div>
         {exp===em.id && <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
           {em.ents.length===0 ? <div style={{ color: C.dim, textAlign: "center", padding: 10, fontSize: 11 }}>No entries</div> : (() => {
@@ -1194,8 +1509,8 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
         {/* Submitted table */}
         {dd.emps.length > 0 ? <div style={{ marginBottom: 14 }}>
           <div style={{ fontWeight: 600, fontSize: 12, color: C.green, marginBottom: 8, display: "flex", alignItems: "center", gap: 5 }}><CheckCircle size={13} /> Submitted ({dd.emps.length} employees)</div>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: C.card, borderRadius: 10, overflow: "hidden" }}><thead><tr><th style={tth()}>Employee</th><th style={tth()}>Person</th><th style={{ ...tth(), textAlign: "right" }}>Jobs</th><th style={{ ...tth(), textAlign: "center" }}>Target</th></tr></thead>
-          <tbody>{dd.emps.map(em=>{ const hit=em.tot>=tgt; const pp=Object.entries(em.ppl).sort((a,b)=>b[1]-a[1]); return pp.map(([person,jobs],pi)=><tr key={`${em.eid}-${person}`} style={{ background: hit ? `${C.green}06` : "transparent" }}>{pi===0&&<td style={{ ...ttd(), fontWeight: 600, verticalAlign: "top" }} rowSpan={pp.length}><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Ring v={em.tot} mx={tgt} sz={28} sw={2} /><div><div>{em.name}</div><div style={{ fontSize: 10, color: C.dim }}>{em.tot} total</div></div></div></td>}<td style={ttd()}>{person}</td><td style={{ ...ttd(), textAlign: "right", fontWeight: 700, color: C.green }}>{jobs}</td>{pi===0&&<td style={{ ...ttd(), textAlign: "center", verticalAlign: "top" }} rowSpan={pp.length}>{hit?<Tag c={C.green}>Met</Tag>:<Tag c={C.red}>{tgt-em.tot} short</Tag>}</td>}</tr>); })}</tbody></table>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: C.card, borderRadius: 10, overflow: "hidden" }}><thead><tr><th style={tth()}>Employee</th><th style={tth()}>Person</th><th style={{ ...tth(), textAlign: "right" }}>Jobs</th><th style={{ ...tth(), textAlign: "center" }}>Target</th><th style={{ ...tth(), width: 60 }}></th></tr></thead>
+          <tbody>{dd.emps.map(em=>{ const hit=em.tot>=tgt; const pp=Object.entries(em.ppl).sort((a,b)=>b[1]-a[1]); return pp.map(([person,jobs],pi)=>{ const entry = st.entries.find(x => x.eid === em.eid && x.person === person && x.date === sd); return <tr key={`${em.eid}-${person}`} style={{ background: hit ? `${C.green}06` : "transparent" }}>{pi===0&&<td style={{ ...ttd(), fontWeight: 600, verticalAlign: "top" }} rowSpan={pp.length}><div style={{ display: "flex", alignItems: "center", gap: 6 }}><Ring v={em.tot} mx={tgt} sz={28} sw={2} /><div><div>{em.name}</div><div style={{ fontSize: 10, color: C.dim }}>{em.tot} total</div></div></div></td>}<td style={ttd()}>{person}</td><td style={{ ...ttd(), textAlign: "right", fontWeight: 700, color: C.green }}>{jobs}</td>{pi===0&&<td style={{ ...ttd(), textAlign: "center", verticalAlign: "top" }} rowSpan={pp.length}>{hit?<Tag c={C.green}>Met</Tag>:<Tag c={C.red}>{tgt-em.tot} short</Tag>}</td>}<td style={ttd()}>{entry && <div style={{ display: "flex", gap: 3 }}><button onClick={()=>{setEdM(entry.id);setEdD({person:entry.person,jobs:entry.jobs,date:entry.date});}} style={{ background: "none", border: "none", cursor: "pointer" }}><Edit3 size={11} color={C.amber} /></button><button onClick={()=>rmEn(entry.id)} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={11} color={C.dim} /></button></div>}</td></tr>; }); })}</tbody></table>
         </div> : <div style={{ ...crd(), textAlign: "center", padding: 20, color: C.dim, marginBottom: 14 }}>No applications submitted on this date</div>}
         {/* Still Waiting section */}
         {(()=>{
@@ -1234,7 +1549,7 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
       <div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Target size={15} color={C.cyan} /> People</div>
       {(()=>{ try {
         const now30 = new Date(); now30.setDate(now30.getDate() - 30);
-        const monthAgo = now30.toISOString().split("T")[0];
+        const monthAgo = `${now30.getFullYear()}-${String(now30.getMonth()+1).padStart(2,"0")}-${String(now30.getDate()).padStart(2,"0")}`;
 
         const pd={}; st.entries.filter(x => x.date <= td()).forEach(x=>{
           if(!pd[x.person]) pd[x.person]={name:x.person, allJobs:0, allEntries:[], by:new Set(), monthJobs:0, monthDays:new Set()};
@@ -1267,7 +1582,7 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
             stat: st.pstat?.[p.name]||"active", evs, companies,
             totalDays: countWorkdays(allDays),
             monthJobs: p.monthJobs, monthDays: countWorkdays([...p.monthDays]),
-            avgPerDay: (() => { const wd = countWorkdays([...p.monthDays]); return wd > 0 ? Math.round(p.monthJobs / wd) : 0; })(),
+            avgPerDay: (() => { const ds = [...new Set(p.allEntries.map(e => e.date))]; const wd = countWeekdaysIn(ds); return Math.round(p.allJobs / wd); })(),
           };
         }).sort((a,b)=>b.allJobs-a.allJobs);
 
@@ -1304,10 +1619,14 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ fontWeight: 800, fontSize: 16 }}>{p.name}</span>
                     <Tag c={s.c}><SI size={9} /> {s.l}</Tag>
+                    <button onClick={() => { setPersonEdM(p.name); setPersonEdName(p.name); setPersonEdStat(p.stat === "active" || isStopped(p.stat) ? (isStopped(p.stat) ? "stopped" : "active") : p.stat); }} style={{ background: `${C.blue}10`, border: `1px solid ${C.blue}25`, borderRadius: 5, padding: "2px 8px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 3, color: C.blue, fontSize: 10, fontWeight: 600 }}><Edit3 size={9} /> Edit</button>
                   </div>
                   <div style={{ fontSize: 11, color: C.sub, marginTop: 3 }}>Applied by: {p.byS}</div>
                 </div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: C.dim }}>#{idx + 1}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <Bs c={C.dim} o onClick={() => changePersonStatus(p.name, p.stat === "active" ? "placed" : "active")}>{p.stat === "active" ? "Mark Placed" : "Set Active"}</Bs>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: C.dim }}>#{idx + 1}</span>
+                </div>
               </div>
 
               {/* Stats grid */}
@@ -1340,30 +1659,48 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead><tr>
                     <th style={tth()}>Company</th>
-                    <th style={tth()}>Current Stage</th>
+                    <th style={tth()}>Stage</th>
                     <th style={{ ...tth(), width: 140 }}>Progress</th>
-                    <th style={tth()}>Last Activity</th>
+                    <th style={tth()}>Last</th>
+                    <th style={{ ...tth(), width: 70 }}>Actions</th>
                   </tr></thead>
                   <tbody>{p.companies.map(comp => {
                     const stageEt = comp.isRejected ? gE("rejected") : gE(comp.stage);
                     const stageIdx = PIPE_ORDER.indexOf(comp.stage);
-                    return <tr key={comp.name} style={{ background: comp.isRejected ? C.redD : comp.stage === "placed" ? C.goldD : "transparent" }}>
-                      <td style={{ ...ttd(), fontWeight: 600 }}>{comp.name}</td>
-                      <td style={ttd()}>
-                        {comp.isRejected ? <Tag c={C.red}><XCircle size={9} /> Rejected</Tag> :
-                          <Tag c={stageEt.c}>{React.createElement(stageEt.i, { size: 9 })} {PIPE_LABELS[comp.stage] || comp.stage}</Tag>}
-                      </td>
-                      <td style={ttd()}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          {PIPE_ORDER.map((s, i) => <div key={s} style={{
-                            flex: 1, height: 5, borderRadius: 2.5, marginRight: i < 4 ? 1 : 0,
-                            background: comp.isRejected ? (C.red + "30") : i <= stageIdx ? gE(s).c : C.border,
-                            opacity: comp.isRejected ? 0.5 : i <= stageIdx ? 1 : 0.2,
-                          }} />)}
-                        </div>
-                      </td>
-                      <td style={{ ...ttd(), fontSize: 11, color: C.sub }}>{fmtD(comp.latest)}</td>
-                    </tr>;
+                    return <React.Fragment key={comp.name}>
+                      <tr style={{ background: comp.isRejected ? C.redD : comp.stage === "placed" ? C.goldD : "transparent" }}>
+                        <td style={{ ...ttd(), fontWeight: 600 }}>
+                          <span>{comp.name}</span>
+                          <button onClick={() => { setCompRenameM({ person: p.name, company: comp.name }); setCompRenameName(comp.name); }} title="Rename company" style={{ background: "none", border: "none", cursor: "pointer", marginLeft: 4, verticalAlign: "middle" }}><Edit3 size={9} color={C.blue} /></button>
+                        </td>
+                        <td style={ttd()}>
+                          {comp.isRejected ? <Tag c={C.red}><XCircle size={9} /> Rejected</Tag> :
+                            <Tag c={stageEt.c}>{React.createElement(stageEt.i, { size: 9 })} {PIPE_LABELS[comp.stage] || comp.stage}</Tag>}
+                        </td>
+                        <td style={ttd()}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 1 }}>
+                            {PIPE_ORDER.map((s, i) => <div key={s} style={{
+                              flex: 1, height: 5, borderRadius: 2.5, marginRight: i < 4 ? 1 : 0,
+                              background: comp.isRejected ? (C.red + "30") : i <= stageIdx ? gE(s).c : C.border,
+                              opacity: comp.isRejected ? 0.5 : i <= stageIdx ? 1 : 0.2,
+                            }} />)}
+                          </div>
+                        </td>
+                        <td style={{ ...ttd(), fontSize: 11, color: C.sub }}>{fmtD(comp.latest)}</td>
+                        <td style={ttd()}>
+                          <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+                            {comp.events.map(ev => {
+                              const et = gE(ev.type);
+                              return <span key={ev.id} style={{ display: "inline-flex", gap: 1, alignItems: "center", padding: "1px 4px", borderRadius: 4, background: `${et.c}08`, fontSize: 9 }}>
+                                <span style={{ color: et.c }}>{ev.type.slice(0,3)}</span>
+                                <button onClick={() => { setEvEdM(ev.id); setEvEdD({ company: ev.company, type: ev.type, date: ev.date, note: ev.note || "" }); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Edit3 size={8} color={C.amber} /></button>
+                                <button onClick={() => rmEv(ev.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Trash2 size={8} color={C.dim} /></button>
+                              </span>;
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    </React.Fragment>;
                   })}</tbody>
                 </table>
               </div>}
@@ -1455,6 +1792,52 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
     {tab === "cfg" && <div style={{ animation: "fi .3s", maxWidth: 420 }}>
       <div style={{ fontWeight: 700, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}><Shield size={15} color={C.green} /> Settings</div>
       <div style={crd()}><div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8 }}>Admin Password</div><div style={{ display: "flex", gap: 8 }}><input type="text" placeholder="New (4+)" value={np2} onChange={e=>setNp2(e.target.value)} style={{ ...inp(), flex: 1 }} /><B c={C.green} onClick={()=>{if(np2.length>=4){save({...st,pin:np2});setNp2("");}}}>Save</B></div></div>
+
+      {/* Employee Access Control */}
+      <div style={crd()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 600, fontSize: 12 }}>Employee Access ({st.emps.filter(e => !e.removed).length} active)</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => save({ ...st, regLock: !st.regLock })} style={{ padding: "4px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 10, fontFamily: "inherit", background: st.regLock ? C.redD : C.greenD, color: st.regLock ? C.red : C.green }}>{st.regLock ? "Registration Locked" : "Registration Open"}</button>
+            <Bs c={C.blue} onClick={() => setAddM(true)}><Plus size={10} /> Add</Bs>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>{st.regLock ? "Registration is locked. Only you can add employees. Toggle above to allow self-registration." : "Self-registration is open. Employees can register themselves. Toggle above to lock it."}</div>
+        {st.emps.filter(e => !e.removed).length > 0 ? <div style={{ maxHeight: 250, overflowY: "auto" }}>
+          {st.emps.filter(e => !e.removed).map(emp => {
+            const entryCount = st.entries.filter(x => x.eid === emp.id).length;
+            const joined = emp.dt ? fmtD(emp.dt) : "—";
+            return <div key={emp.id} style={{ padding: "8px 10px", borderRadius: 7, background: C.panel, border: `1px solid ${C.border}`, marginBottom: 3 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: 7, background: C.blueD, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Users size={12} color={C.blue} /></div>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 12 }}>{emp.name}</div>
+                    <div style={{ fontSize: 9, color: C.dim }}>Joined {joined} • {entryCount} entries</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 3 }}>
+                  <Bs c={C.blue} o onClick={() => { setRenameM(emp.id); setRenameName(emp.name); }}><Edit3 size={9} /></Bs>
+                  <Bs c={C.amber} o onClick={() => setRpM(emp.id)}><Key size={9} /></Bs>
+                  <Bs c={C.red} o onClick={() => rmE(emp.id)}><Trash2 size={9} /></Bs>
+                </div>
+              </div>
+              <div style={{ marginTop: 4, marginLeft: 36, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 9, color: C.dim }}>Applying for:</span>
+                {(emp.pplNames && emp.pplNames.length > 0) ? emp.pplNames.map((name, i) => <span key={i} style={{ fontSize: 10, padding: "1px 8px", borderRadius: 10, background: C.cyanD, color: C.cyan, fontWeight: 600 }}>{name}</span>) : <span style={{ fontSize: 10, color: C.dim }}>{emp.pplCount || 1} {(emp.pplCount || 1) === 1 ? "person" : "people"} (no names set)</span>}
+                <button onClick={() => { setEditPplM(emp.id); setEditPplNames(emp.pplNames && emp.pplNames.length > 0 ? [...emp.pplNames] : Array(emp.pplCount || 1).fill("")); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Edit3 size={9} color={C.blue} /></button>
+              </div>
+            </div>;
+          })}
+        </div> : <div style={{ fontSize: 11, color: C.dim }}>No employees registered yet.</div>}
+        {st.emps.filter(e => e.removed).length > 0 && <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: C.red, marginBottom: 6 }}>Removed ({st.emps.filter(e => e.removed).length})</div>
+          {st.emps.filter(e => e.removed).map(emp => <div key={emp.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", borderRadius: 6, marginBottom: 2, opacity: 0.6 }}>
+            <span style={{ fontSize: 11 }}>{emp.name} <span style={{ color: C.dim, fontSize: 9 }}>removed {fmtD(emp.removed)}</span></span>
+            <div style={{ display: "flex", gap: 3 }}><Bs c={C.green} o onClick={() => restoreE(emp.id)}>Restore</Bs><Bs c={C.red} o onClick={() => hardDeleteE(emp.id)}><Trash2 size={9} /></Bs></div>
+          </div>)}
+        </div>}
+      </div>
       <div style={crd()}><div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8 }}>Daily Target (current: {tgt})</div><div style={{ display: "flex", gap: 8 }}><input type="number" placeholder={String(tgt)} value={nt} onChange={e=>setNt(e.target.value)} style={{ ...inp(), flex: 1 }} /><B c={C.amber} onClick={()=>{if(Number(nt)>0){save({...st,target:Number(nt)});setNt("");}}}>Set</B></div></div>
 
       {/* Holiday Management */}
@@ -1569,4 +1952,3 @@ function BackupRestore({ st, save }) {
     </div>}
   </div>;
 }
-
