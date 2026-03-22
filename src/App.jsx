@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid
@@ -363,22 +363,24 @@ function EmpStats({ my, tgt }) {
   const weekStr = thisWeekStart.toISOString().split("T")[0];
   const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  const weekEntries = my.filter(e => e.date >= weekStr && isWorkday(e.date));
-  const monthEntries = my.filter(e => e.date.startsWith(monthStr) && isWorkday(e.date));
+  // Include ALL entries (even weekends/holidays) for totals - they did the work
+  const weekEntries = my.filter(e => e.date >= weekStr);
+  const monthEntries = my.filter(e => e.date.startsWith(monthStr));
   const weekJobs = weekEntries.reduce((a, e) => a + e.jobs, 0);
   const monthJobs = monthEntries.reduce((a, e) => a + e.jobs, 0);
+  // Count only working days for "days active" display
   const weekDays = new Set(weekEntries.map(e => e.date)).size;
   const monthDays = new Set(monthEntries.map(e => e.date)).size;
   const weekPpl = new Set(weekEntries.map(e => e.person)).size;
   const monthPpl = new Set(monthEntries.map(e => e.person)).size;
-  const allDays = [...new Set(my.map(e => e.date))].filter(d => isWorkday(d));
+  const allDays = [...new Set(my.map(e => e.date))];
   const daysHit = allDays.filter(d => my.filter(e => e.date === d).reduce((a, e) => a + e.jobs, 0) >= tgt).length;
 
-  // Precise avg: per person, calc their own daily avg (working days only - excludes weekends & holidays), then average
+  // Avg: total jobs per person / number of days they submitted (at least 1)
   const calcAvg = (entries) => {
     const pm = {};
     entries.forEach(e => { if (!pm[e.person]) pm[e.person] = { t: 0, d: new Set() }; pm[e.person].t += e.jobs; pm[e.person].d.add(e.date); });
-    const avgs = Object.values(pm).map(p => { const wd = countWorkdays([...p.d]); return wd > 0 ? p.t / wd : 0; });
+    const avgs = Object.values(pm).map(p => p.d.size > 0 ? Math.round(p.t / p.d.size) : 0);
     return avgs.length > 0 ? Math.round(avgs.reduce((a,v) => a+v, 0) / avgs.length) : 0;
   };
   const weekAvg = calcAvg(weekEntries);
@@ -824,7 +826,7 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
     // Precise avg/day: for each person this employee applies for, calc that person's avg (working days only - excludes weekends & holidays), then average all
     const personAvgs = {};
     ents.forEach(x => { if (!personAvgs[x.person]) personAvgs[x.person] = { total: 0, days: new Set() }; personAvgs[x.person].total += x.jobs; personAvgs[x.person].days.add(x.date); });
-    const perPersonAvgs = Object.values(personAvgs).map(p => { const wd = countWorkdays([...p.days]); return wd > 0 ? p.total / wd : 0; });
+    const perPersonAvgs = Object.values(personAvgs).map(p => p.days.size > 0 ? p.total / p.days.size : 0);
     const avgDay = perPersonAvgs.length > 0 ? Math.round(perPersonAvgs.reduce((a,v) => a+v, 0) / perPersonAvgs.length) : 0;
     return { ...em, ents, jobs, ppl, todJ, stars, evts, byD, avgDay };
   }), [st, fil]);
@@ -935,7 +937,7 @@ function Adm({ st, save, tab, setTab, out, ref2 }) {
           if (!personMap[e.person]) personMap[e.person] = { total: 0, days: new Set() };
           personMap[e.person].total += e.jobs; personMap[e.person].days.add(e.date);
         });
-        const personAvgs = Object.values(personMap).map(p => { const wd = countWorkdays([...p.days]); return wd > 0 ? p.total / wd : 0; });
+        const personAvgs = Object.values(personMap).map(p => p.days.size > 0 ? p.total / p.days.size : 0);
         const avgPerDay = personAvgs.length > 0 ? Math.round(personAvgs.reduce((a,v) => a+v, 0) / personAvgs.length) : 0;
         const activeCount = activeEs.length;
         return <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, marginBottom: 18 }}>
@@ -1567,3 +1569,4 @@ function BackupRestore({ st, save }) {
     </div>}
   </div>;
 }
+
